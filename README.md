@@ -1,0 +1,1 @@
+# obsidian-cm6-decoration-example
