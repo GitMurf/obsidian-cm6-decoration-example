@@ -1,4 +1,7 @@
 .cm-suggestion-candidate {
-    color: red;
-    background-color: lightgoldenrodyellow;
+    background-color: #eee9fd;
+    /* border: 2px dotted #8b6cef; */
+    font-style: italic;
+    font-weight: 500;
+    /* padding: 0px 3px; */
 }
