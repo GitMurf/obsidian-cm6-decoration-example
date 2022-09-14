@@ -1,4 +1,4 @@
-import { Plugin, App } from 'obsidian';
+import { Plugin, App, editorInfoField, TFile } from 'obsidian';
 import { ViewPlugin, Decoration, DecorationSet, PluginValue, EditorView, ViewUpdate } from '@codemirror/view';
 import { RangeSetBuilder, Extension } from '@codemirror/state';
 import { formatDate } from './helpers';
@@ -59,7 +59,14 @@ const suggestionsExtension = (app: App): ViewPlugin<PluginValue> => {
             decorations: DecorationSet;
 
             constructor(view: EditorView) {
+                console.log("Constructor TFile:", this.getTFileFromView(view));
                 this.decorations = this.decorateView(view);
+            }
+
+            getTFileFromView(view: EditorView): TFile {
+                // Get TFile from the current EditorView
+                const myTFile = view.state.field(editorInfoField).file;
+                return myTFile;
             }
 
             public update(update: ViewUpdate): void {
@@ -81,19 +88,52 @@ const suggestionsExtension = (app: App): ViewPlugin<PluginValue> => {
             }
 
             private decorateView(view: EditorView): DecorationSet {
-                const keywordList = ['one', 'two', 'three', 'GitHub', 'Pull', 'Request decoration'];
+                if (!view.hasFocus) {
+                    console.log("This Editor does not have focus so skip...", view, view.hasFocus);
+                    return Decoration.none;
+                }
                 const builder = new RangeSetBuilder<Decoration>();
-                // Decorate visible ranges only for performance reasons
-                for (const { from, to } of view.visibleRanges) {
-                    const matchesList = [];
+                const keywordList = ['one', 'two', 'three', 'GitHub', 'Pull', 'Request decoration'];
+
+                // Setup regex to match stuff you do NOT want highlighted
+                // Page link square brackets (double or single)
+                const regSqBrackets = "\\[[^\\]\\n]+?\\]";
+                // Inline code backticks
+                const regBackticks = "`[^`\\n]+?`";
+                // Code block triple backticks
+                const regTripleBackticks = "```[\\s\\S]+?```";
+                // Hashtags
+                const regHashtags = "#[^\\s#]+";
+                // URL links
+                const regURLLinks = "(?:https?://|www\\.)[^\\s]+";
+                // Combine all the regex into one regexp
+                const regExIgnore = new RegExp(`(${regSqBrackets}|${regBackticks}|${regTripleBackticks}|${regHashtags}|${regURLLinks})`, "gi");
+
+                // Decorate visible ranges only (performance reasons)
+                let visibleRanges = view.visibleRanges;
+                /* COMMENTING OUT SINGLE LINE SCOPE FOR NOW
+                    // This will only apply for the current active line but commenting out as it was removing everything else from every other line
+                    // The preferred method would be that all highlights stay and then only the current line get re-computed (but I don't know if that is possible)
+                const curPos = view.state.selection.ranges[0].from;
+                const linesInView = view.viewportLineBlocks;
+                const activeLine = linesInView.find((line) => line.from <= curPos && line.to >= curPos);
+                visibleRanges = activeLine ? [{ from: activeLine.from, to: activeLine.to }] : visibleRanges;
+                */
+                for (const { from, to } of visibleRanges) {
+                    console.log("TFile:", this.getTFileFromView(view));
+                    console.log("Decorating visible range:", from, to, view, "focus:", view.hasFocus);
+                    console.log("SELECTION:", view.state.selection);
+
                     const textToHighlight = view.state.sliceDoc(from, to);
-                    // Match everything inside double square brackets
-                    const bracketMatches = textToHighlight.split(/(\[\[[^\]\n]+?\]\])/g);
+                    console.log("textToHighlight:", textToHighlight);
+                    const matchesToIgnore = textToHighlight.split(regExIgnore);
+                    // console.log("matchesToIgnore", matchesToIgnore);
+                    const matchesList = [];
                     let curPosition = 0;
-                    for (const eachPart of bracketMatches) {
+                    for (const eachPart of matchesToIgnore) {
                         // console.log(`eachPart-${curPosition}:`, eachPart);
-                        if (eachPart.startsWith('[[') && eachPart.endsWith(']]')) {
-                            // We do not want to match on page links
+                        if (eachPart.match(regExIgnore)) {
+                            // We do not want to match the ignored stuff
                         } else {
                             for (const keyword of keywordList) {
                                 const keywordRegex = new RegExp(`${keyword}`, 'gi');
@@ -108,10 +148,10 @@ const suggestionsExtension = (app: App): ViewPlugin<PluginValue> => {
                                             start: start + curPosition,
                                             end: end + curPosition,
                                             keyword: keyword,
-                                            match: match,
+                                            match: match
                                         }
                                         matchesList.push(decResult);
-                                        // console.log(decResult);
+                                        console.log(decResult);
                                     }
                                 }
                             }
@@ -123,8 +163,10 @@ const suggestionsExtension = (app: App): ViewPlugin<PluginValue> => {
                     matchesList.sort((a, b) => a.start - b.start);
                     // console.log('matchesList:', matchesList);
                     matchesList.forEach(eachDecMatch => {
-                        // console.log(eachDecMatch);
-                        builder.add(from + eachDecMatch.start, from + eachDecMatch.end, underlineDecoration(eachDecMatch.start, eachDecMatch.end, eachDecMatch.match));
+                        console.log(eachDecMatch);
+                        const start = eachDecMatch.start + from;
+                        const end = eachDecMatch.end + from;
+                        builder.add(start, end, underlineDecoration(start, end, eachDecMatch.keyword));
                     });
                 }
                 return builder.finish();
@@ -148,6 +190,13 @@ const suggestionsExtension = (app: App): ViewPlugin<PluginValue> => {
                     console.log('positionStart:', positionStart, 'positionEnd:', positionEnd, 'indexKeyword:', indexKeyword);
 
                     // On click can show the modal suggester for page link completion
+                    view.dispatch({
+                        changes: {
+                            from: Number(positionStart),
+                            to: Number(positionEnd),
+                            insert: `[[${indexKeyword}]]`,
+                        },
+                    });
                 },
             },
         }
