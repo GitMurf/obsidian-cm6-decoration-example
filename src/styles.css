@@ -1,1 +1,4 @@
-/* Nothing required yet */
+.cm-suggestion-candidate {
+    color: red;
+    background-color: lightgoldenrodyellow;
+}

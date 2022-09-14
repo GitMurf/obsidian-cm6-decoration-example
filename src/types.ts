@@ -54,3 +54,9 @@ export interface SyncPlugin extends Plugin_2 {
     };
     statusBarEl: HTMLDivElement;
 }
+
+declare module "@codemirror/view" {
+    interface EditorView {
+        updateState: number;
+    }
+}
