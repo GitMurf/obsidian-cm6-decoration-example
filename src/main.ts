@@ -1,4 +1,4 @@
-import { Plugin, editorInfoField, TFile, Editor } from 'obsidian';
+import { Plugin, editorInfoField, TFile, Editor, App } from 'obsidian';
 import { ViewPlugin, Decoration, DecorationSet, PluginValue, EditorView, ViewUpdate } from '@codemirror/view';
 import { RangeSetBuilder, Extension } from '@codemirror/state';
 import { formatDate } from './helpers';
@@ -10,6 +10,7 @@ export default class MyPlugin extends Plugin {
     pluginName = 'CM6 Decoration Example by Murf';
     editorExtension: Extension[] = [];
     onFileOpen: TFile | null = null;
+    unlinkFinder: UnlinkFinderLookup;
 
     async onload() {
         console.log(`Loading plugin: ${this.pluginName} at [${formatDate()}]`);
@@ -29,6 +30,7 @@ export default class MyPlugin extends Plugin {
 
         this.app.workspace.onLayoutReady(() => {
             console.log("onLayoutReady");
+            this.unlinkFinder = new UnlinkFinderLookup(this);
             this.updateEditorExtension(suggestionsExtension(this));
         });
 
@@ -36,7 +38,10 @@ export default class MyPlugin extends Plugin {
             this.app.workspace.on('file-open', (fileObj) => {
                 console.log("file-open:", fileObj);
                 // This will save to the plugin object and allow for the CM6 extension to see if the file has just changed so it will run even though the document / viewport has not changed
-                if(fileObj) this.onFileOpen = fileObj;
+                if (fileObj) {
+                    this.onFileOpen = fileObj;
+                    this.unlinkFinder.updateLinkOptions();
+                }
             })
         );
 
@@ -114,7 +119,6 @@ const suggestionsExtension = (plugin: MyPlugin): ViewPlugin<PluginValue> => {
                 */
 
                 const builder = new RangeSetBuilder<Decoration>();
-                const keywordList = ['need', 'GitHub', 'Pull', 'keep'];
 
                 // Setup regex to match stuff you do NOT want highlighted
                 // Code block triple backticks TODO: This is not finished yet with all corner cases (see info in Obsidian note)
@@ -142,7 +146,12 @@ const suggestionsExtension = (plugin: MyPlugin): ViewPlugin<PluginValue> => {
                 const activeLine = linesInView.find((line) => line.from <= curPos && line.to >= curPos);
                 visibleRanges = activeLine ? [{ from: activeLine.from, to: activeLine.to }] : visibleRanges;
                 */
+                // const keywordList = ['need', 'GitHub', 'Pull', 'keep'];
                 // console.log(`Full Doc:\n\n`, view.state.doc.toString());
+                const fullDocString = view.state.doc.toString().toLowerCase();
+                const allMyPages = plugin.unlinkFinder.allLinkOptions;
+                const keywordList = allMyPages.filter((page) => fullDocString.includes(page.name.toLowerCase()));
+                console.log('keywordList:', keywordList);
                 for (const { from, to } of visibleRanges) {
                     // console.log("TFile:", this.getTFileFromView(view));
                     // console.log("Decorating visible range:", from, to, view, "focus:", view.hasFocus);
@@ -160,7 +169,8 @@ const suggestionsExtension = (plugin: MyPlugin): ViewPlugin<PluginValue> => {
                             // We do not want to match the ignored stuff
                         } else {
                             for (const keyword of keywordList) {
-                                const keywordRegex = new RegExp(`${keyword}`, 'gi');
+                                const keywordStr = keyword.name;
+                                const keywordRegex = new RegExp(`${keywordStr}`, 'gi');
                                 const findMatches = eachPart.match(keywordRegex);
                                 if (findMatches) {
                                     let prevIndex = 0;
@@ -171,7 +181,7 @@ const suggestionsExtension = (plugin: MyPlugin): ViewPlugin<PluginValue> => {
                                         const decResult = {
                                             start: start + curPosition,
                                             end: end + curPosition,
-                                            keyword: keyword,
+                                            keyword: keywordStr,
                                             match: match
                                         }
                                         matchesList.push(decResult);
@@ -227,6 +237,7 @@ const suggestionsExtension = (plugin: MyPlugin): ViewPlugin<PluginValue> => {
                     }
 
                     e.preventDefault();
+                    /*
                     const cmEditor = view.state.field(editorInfoField).editor;
                     if (cmEditor) {
                         const getCursor = cmEditor.getCursor();
@@ -234,19 +245,26 @@ const suggestionsExtension = (plugin: MyPlugin): ViewPlugin<PluginValue> => {
                         console.log("getCursor:", getCursor);
                         // console.log("getLine:", getLine);
                     }
+                    */
 
                     // Extract position and replacement text from target element data attributes state
                     const { positionStart, positionEnd, indexKeyword } = target.dataset;
                     console.log('CLICK EVENT: positionStart:', positionStart, 'positionEnd:', positionEnd, 'indexKeyword:', indexKeyword);
 
-                    // On click can show the modal suggester for page link completion
-                    view.dispatch({
-                        changes: {
-                            from: Number(positionStart),
-                            to: Number(positionEnd),
-                            insert: `[[${indexKeyword}]]`,
-                        },
-                    });
+                    if (indexKeyword) {
+                        plugin.unlinkFinder.pageLookup(indexKeyword);
+                        const myMatches = plugin.unlinkFinder.getRecentMatches();
+                        console.log('myMatches:', myMatches);
+
+                        // On click can show the modal suggester for page link completion
+                        view.dispatch({
+                            changes: {
+                                from: Number(positionStart),
+                                to: Number(positionEnd),
+                                insert: `[[${myMatches[0].name}]]`,
+                            },
+                        });
+                    }
                 },
             },
         }
@@ -260,6 +278,169 @@ const underlineDecoration = (start: number, end: number, indexKeyword: string) =
             'data-index-keyword': indexKeyword,
             'data-position-start': `${start}`,
             'data-position-end': `${end}`,
+            'title': indexKeyword,
         },
     });
 };
+
+class UnlinkFinderLookup {
+    plugin: MyPlugin;
+    allLinkOptions: { name: string; path: string }[];
+    allLinkMatches: { name: string; path: string }[];
+
+    constructor(plugin: MyPlugin) {
+        this.plugin = plugin;
+        this.updateLinkOptions();
+    }
+
+    updateLinkOptions() {
+        this.allLinkOptions = this.getLinkOptions(this.plugin.app);
+        console.log("UnlinkFinder updateLinkOptions:", this.allLinkOptions.length);
+    }
+
+    getLinkOptions(app: App) {
+        const files = app.vault.getMarkdownFiles();
+        const links: { name: string; path: string }[] = [];
+        files.forEach((file: TFile) => {
+            links.push({ name: file.basename, path: file.path });
+        });
+        const unresolvedLinkUniq: string[] = [];
+        const unResLinks: { [key: string]: number }[] = Object.values(Object.fromEntries(Object.entries(app.metadataCache.unresolvedLinks)));
+        unResLinks.forEach((eachItem) => {
+            const theValues = Object.keys(eachItem);
+            if (theValues.length > 0) {
+                theValues.forEach(eachLink => {
+                    if (!unresolvedLinkUniq.includes(eachLink)) {
+                        unresolvedLinkUniq.push(eachLink);
+                        links.push({ name: eachLink, path: "Unresolved" });
+                    } else {
+                        // console.log("already exists");
+                    }
+                })
+            }
+        });
+        // let uniq: { name: string; path: string }[] = Array.from(new Set(links));
+        return links;
+    }
+
+    getRecentMatches() {
+        return this.allLinkMatches;
+    }
+
+    pageLookup(val: string) {
+        this.allLinkMatches = [];
+        const matchString = val;
+        if (matchString.trim().length > 1) {
+            // console.log(matchString);
+            this.findExact(matchString);
+            this.findStart(matchString);
+            this.findContains(matchString);
+            this.findSpaces(matchString);
+            this.findWildcard(matchString);
+            this.findFuzzyWords(matchString);
+            // this.findFuzzyCharacters(matchString);
+            // let uniq: { name: string; path: string }[] = Array.from(new Set(this.allLinkMatches));
+            const uniqueTracker: string[] = [];
+            const uniq = this.allLinkMatches.filter((item) => {
+                if (uniqueTracker.includes(item.path + item.name)) {
+                    return false;
+                } else {
+                    uniqueTracker.push(item.path + item.name);
+                    return true;
+                }
+            });
+            // console.log(uniq);
+            this.allLinkMatches = uniq;
+            if (this.allLinkMatches.length > 0) {
+                this.setOptions();
+            }
+        }
+    }
+
+    setOptions() {
+        console.log("setOptions:", this.allLinkMatches.length);
+        // this.allLinkMatches.forEach((eachMatch) => {
+        //     this.addItemDiv(eachMatch);
+        // });
+    }
+
+    findExact(val: string) {
+        const valString = val.toLowerCase();
+        const foundMatches = this.allLinkOptions.find(eachLink => eachLink.name.toLowerCase() === valString);
+        if (foundMatches) this.allLinkMatches.push(foundMatches);
+        // console.log(foundMatches);
+    }
+
+    findStart(val: string) {
+        const valString = val.toLowerCase();
+        const foundMatches = this.allLinkOptions.filter(eachLink => eachLink.name.toLowerCase().startsWith(valString));
+        if (foundMatches) this.sortAndAdd(foundMatches);
+    }
+
+    findContains(val: string) {
+        const valString = val.toLowerCase();
+        const foundMatches = this.allLinkOptions.filter(eachLink => eachLink.name.toLowerCase().indexOf(valString) > -1);
+        if (foundMatches) this.sortAndAdd(foundMatches);
+    }
+
+    findSpaces(val: string) {
+        const valString = val.toLowerCase().replace(/[\s\-._]/g, "");
+        const foundMatches = this.allLinkOptions.filter(eachLink => eachLink.name.toLowerCase().replace(/[\s\-._]/g, "").indexOf(valString) > -1);
+        if (foundMatches) this.sortAndAdd(foundMatches);
+    }
+
+    findWildcard(val: string) {
+        const valString = this.escapeRegExp(val.toLowerCase());
+        const regExp = new RegExp(`${valString.replace(/\./g, "..*").replace(/\s+/g, ".*")}`, "i");
+        // console.log(regExp);
+        const foundMatches = this.allLinkOptions.filter(eachLink => eachLink.name.match(regExp));
+        if (foundMatches) this.sortAndAdd(foundMatches);
+    }
+
+    findFuzzyWords(val: string) {
+        const valString = val.toLowerCase();
+        const splitWords = valString.split(" ");
+        const foundMatches = this.allLinkOptions.filter(eachLink => {
+            const eachLinkLower = eachLink.name.toLowerCase();
+            let foundAllWords = true;
+            splitWords.forEach(eachWord => {
+                if (foundAllWords) {
+                    if (eachLinkLower.indexOf(eachWord) < 0) {
+                        foundAllWords = false;
+                    }
+                }
+            })
+            if (foundAllWords) {
+                return true;
+            } else {
+                return false;
+            }
+        });
+        if (foundMatches) this.sortAndAdd(foundMatches);
+    }
+
+    findFuzzyCharacters(val: string) {
+        const valString = val.toLowerCase();
+        let newRegexFuzzyStr = "";
+        for (const char of valString) {
+            if (char !== " ") {
+                newRegexFuzzyStr += `${this.escapeRegExp(char)}.*`;
+            }
+        }
+        const regExp = new RegExp(`${newRegexFuzzyStr}`, "i");
+        // console.log(regExp);
+        const foundMatches = this.allLinkOptions.filter(eachLink => eachLink.name.match(regExp));
+        if (foundMatches) this.sortAndAdd(foundMatches);
+    }
+
+    sortAndAdd(foundMatches: { name: string; path: string }[]) {
+        // sort by length as typically the shorter the word/phrase the more relevant to the user
+        foundMatches.sort((a, b) => a.name.length - b.name.length);
+        this.allLinkMatches.push(...foundMatches);
+        // console.log(foundMatches);
+    }
+
+    escapeRegExp(text: string) {
+        return text.replace(/[-[\]{}()*+?.,\\^$|#]/g, '\\$&');
+    }
+}
