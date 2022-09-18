@@ -136,7 +136,9 @@ const suggestionsExtension = (plugin: MyPlugin): ViewPlugin<PluginValue> => {
                 const regExIgnore = new RegExp(`(${regTripleBackticks}|${regTripleBackticks2}|${regSqBrackets}|${regBackticks}|${regHashtags}|${regURLLinks})`, "gi");
 
                 // Decorate visible ranges only (performance reasons)
-                const visibleRanges = view.visibleRanges;
+                // const visibleRanges = view.visibleRanges;
+                // Licat suggested: Don't use visibleRanges use viewportLineBlocks
+                const visibleLineBlocks = view.viewportLineBlocks;
 
                 /* COMMENTING OUT SINGLE LINE SCOPE FOR NOW
                     // This will only apply for the current active line but commenting out as it was removing everything else from every other line
@@ -147,12 +149,13 @@ const suggestionsExtension = (plugin: MyPlugin): ViewPlugin<PluginValue> => {
                 visibleRanges = activeLine ? [{ from: activeLine.from, to: activeLine.to }] : visibleRanges;
                 */
                 // const keywordList = ['need', 'GitHub', 'Pull', 'keep'];
-                // console.log(`Full Doc:\n\n`, view.state.doc.toString());
+                console.log(`Full Doc:\n\n`, view.state.doc.toString());
+                console.log(visibleLineBlocks);
                 const fullDocString = view.state.doc.toString().toLowerCase();
                 const allMyPages = plugin.unlinkFinder.allLinkOptions;
                 const keywordList = allMyPages.filter((page) => fullDocString.includes(page.name.toLowerCase()));
                 console.log('keywordList:', keywordList);
-                for (const { from, to } of visibleRanges) {
+                for (const { from, to } of visibleLineBlocks) {
                     // console.log("TFile:", this.getTFileFromView(view));
                     // console.log("Decorating visible range:", from, to, view, "focus:", view.hasFocus);
                     // console.log("SELECTION:", view.state.selection);
@@ -321,6 +324,62 @@ class UnlinkFinderLookup {
         });
         // let uniq: { name: string; path: string }[] = Array.from(new Set(links));
         return links;
+    }
+
+    mapLinkOptions() {
+        // create new Map
+        const linkOptionsMap = new Map<string, never>();
+        // loop through all link options
+        this.allLinkOptions.forEach((eachLinkObj) => {
+            // loop through each word in the link name (split by space, dash, underscore, period)
+            eachLinkObj.name.split(/[\s\-_.,]/).forEach((eachWord) => {
+                // process and normalize the word by removing plurals, ing, ed, etc.
+                const normalizedWord = this.normalizeWord(eachWord);
+                if (!normalizedWord) return;
+                const mapValue = {
+                    linkObj: eachLinkObj,
+                    originalWord: eachWord,
+                }
+                const getMappedWord: Map<string, { linkObj: never, originalWord: string }> = linkOptionsMap.get(normalizedWord);
+                // if the word is not already in the map, add it
+                if (!getMappedWord) {
+                    linkOptionsMap.set(normalizedWord, [mapValue]);
+                } else {
+                    // if the word is already in the map, add the link obj to the array
+                    getMappedWord.push(eachLinkObj);
+                }
+            });
+        });
+    }
+
+    normalizeWord(word: string) {
+        // if the word is less than 3 characters, skip it
+        if (word.trim().length < 3) return null;
+        // if the word is on our ignored list, skip it
+        if (this.ignoreWord(word.trim())) return null;
+        // normalize the word by removing plurals, ing, ed, etc.
+        const stemmedWord = this.stemWord(word);
+        if (!stemmedWord) return null;
+        return stemmedWord;
+    }
+
+    // normalize down to word stems for better matching
+    stemWord(word: string) {
+        let stemmedWord = word.trim().toLowerCase();
+        // if the word is less than 3 characters return null
+        if (stemmedWord.length < 3) return null;
+        if (this.ignoreWord(stemmedWord)) return null;
+        // remove plurals, ing, ed, es, er with regex
+        stemmedWord = stemmedWord.replace(/(s|ing|ed|es|er)$/, "");
+        // if stemmed word is less than 3 characters, return the original word
+        if (stemmedWord.length < 3) return word.trim().toLowerCase();
+    }
+
+    // list of common words to ignore
+    ignoreWord(word: string) {
+        const ignoreListArray = ["and", "the", "are", "but", "you", "can", "had", "has", "was", "get", "did", "its", "let", "put", "she", "not", "too", "for", "out", "them", "they", "their", "there", "with", "from", "into"];
+        if (ignoreListArray.includes(word)) return true;
+        return false;
     }
 
     getRecentMatches() {
