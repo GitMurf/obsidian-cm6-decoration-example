@@ -25,6 +25,20 @@ export default class MyPlugin extends Plugin {
             // console.log('click', evt);
         });
 
+        this.addCommand({
+            id: `${this.pluginName.replace(/\s/g, '-')}-disable-cm6-extension`,
+            name: `Disable CM6 Extension`,
+            callback: () => {
+                this.disableEditorExtension();
+            }
+        });
+
+        // Add left ribbon icon button
+        const myRibbonFunc = () => {
+            this.updateEditorExtension(suggestionsExtension(this));
+        }
+        this.addRibbonIcon('lucide-list-plus', 'Enable CM6 Extension', myRibbonFunc);
+
         this.registerEditorExtension(this.editorExtension);
 
         this.app.workspace.onLayoutReady(() => {
@@ -53,6 +67,13 @@ export default class MyPlugin extends Plugin {
         console.log("updateEditorExtension");
         this.editorExtension.length = 0; // Empties the array
         this.editorExtension.push(extension);
+        this.app.workspace.updateOptions();
+    }
+
+    disableEditorExtension() {
+        // This should really only run once at startup / loading of the plugin
+        console.log("Disabling CM6 Extension");
+        this.editorExtension.length = 0; // Empties the array
         this.app.workspace.updateOptions();
     }
 
